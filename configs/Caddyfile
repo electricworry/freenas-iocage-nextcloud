@@ -1,4 +1,4 @@
-yourhostnamehere JAIL-IP {
+yourhostnamehere {
 
 	root   /usr/local/www/nextcloud
 	log    /var/log/nextcloud_access.log

@@ -9,10 +9,7 @@ if ! [ $(id -u) = 0 ]; then
 fi
 
 # Initialize defaults
-JAIL_IP=""
-DEFAULT_GW_IP=""
-INTERFACE="vnet0"
-VNET="on"
+CERT_EMAIL=""
 POOL_PATH=""
 JAIL_NAME="nextcloud"
 TIME_ZONE=""
@@ -31,7 +28,6 @@ RELEASE="11.3-RELEASE"
 
 SCRIPT=$(readlink -f "$0")
 SCRIPTPATH=$(dirname "${SCRIPT}")
-. "${SCRIPTPATH}"/nextcloud-config
 CONFIGS_PATH="${SCRIPTPATH}"/configs
 DB_ROOT_PASSWORD=$(openssl rand -base64 16)
 DB_PASSWORD=$(openssl rand -base64 16)
@@ -42,21 +38,17 @@ elif [ "${DATABASE}" = "pgsql" ]; then
 fi
 
 ADMIN_PASSWORD=$(openssl rand -base64 12)
-#RELEASE=$(freebsd-version | sed "s/STABLE/RELEASE/g" | sed "s/-p[0-9]*//")
 
 # Check for nextcloud-config and set configuration
 if ! [ -e "${SCRIPTPATH}"/nextcloud-config ]; then
   echo "${SCRIPTPATH}/nextcloud-config must exist."
   exit 1
 fi
+. "${SCRIPTPATH}"/nextcloud-config
 
 # Check that necessary variables were set by nextcloud-config
-if [ -z "${JAIL_IP}" ]; then
-  echo 'Configuration error: JAIL_IP must be set'
-  exit 1
-fi
-if [ -z "${DEFAULT_GW_IP}" ]; then
-  echo 'Configuration error: DEFAULT_GW_IP must be set'
+if [ -z "${CERT_EMAIL}" ]; then
+  echo 'Configuration error: CERT_EMAIL must be set'
   exit 1
 fi
 if [ -z "${POOL_PATH}" ]; then
@@ -125,13 +117,6 @@ then
   exit 1
 fi
 
-# Make sure DB_PATH is empty -- if not, MariaDB/PostgreSQL will choke
-if [ "$(ls -A "${DB_PATH}")" ]; then
-  echo "${DB_PATH} is not empty!"
-  echo "DB_PATH must be empty, otherwise this script will break your existing database."
-  exit 1
-fi
-
 # Create the jail, pre-installing needed packages
 cat <<__EOF__ >/tmp/pkg.json
 {
@@ -143,13 +128,13 @@ cat <<__EOF__ >/tmp/pkg.json
   "php73-session","php73-wddx","php73-xsl","php73-filter","php73-pecl-APCu",
   "php73-curl","php73-fileinfo","php73-bz2","php73-intl","php73-openssl",
   "php73-ldap","php73-ftp","php73-imap","php73-exif","php73-gmp",
-  "php73-pecl-memcache","php73-pecl-imagick","bash","perl5",
+  "php73-pecl-memcache","php73-pecl-imagick","perl5",
   "p5-Locale-gettext","help2man","texinfo","m4","autoconf"
   ]
 }
 __EOF__
 
-if ! iocage create --name "${JAIL_NAME}" -p /tmp/pkg.json -r "${RELEASE}" ip4_addr="${INTERFACE}|${JAIL_IP}/24" defaultrouter="${DEFAULT_GW_IP}" boot="on" host_hostname="${JAIL_NAME}" vnet="${VNET}"
+if ! iocage create --name "${JAIL_NAME}" -p /tmp/pkg.json -r "${RELEASE}" dhcp="on" boot="on" host_hostname="${JAIL_NAME}" vnet="on" ip6_addr="vnet0|accept_rtadv"
 then
 	echo "Failed to create jail"
 	exit 1
@@ -161,38 +146,19 @@ if [ "${DATABASE}" = "mariadb" ]; then
 elif [ "${DATABASE}" = "pgsql" ]; then
   iocage exec "${JAIL_NAME}" pkg install -qy postgresql10-server php73-pgsql php73-pdo_pgsql
 fi
-mkdir -p "${DB_PATH}"/
-chown -R 88:88 "${DB_PATH}"/
-mkdir -p "${FILES_PATH}"
-chown -R 80:80 "${FILES_PATH}"
-mkdir -p "${PORTS_PATH}"/ports
-mkdir -p "${PORTS_PATH}"/db
 iocage exec "${JAIL_NAME}" mkdir -p /mnt/files
 if [ "${DATABASE}" = "mariadb" ]; then
   iocage exec "${JAIL_NAME}" mkdir -p /var/db/mysql
 elif [ "${DATABASE}" = "pgsql" ]; then
   iocage exec "${JAIL_NAME}" mkdir -p /var/db/postgres
 fi
+
 iocage exec "${JAIL_NAME}" mkdir -p /mnt/configs
-iocage exec "${JAIL_NAME}" mkdir -p /usr/local/www
-mkdir -p /mnt/iocage/jails/${JAIL_NAME}/root/var/db/portsnap
-mkdir -p /mnt/iocage/jails/${JAIL_NAME}/root/mnt/files
-mkdir -p /mnt/iocage/jails/${JAIL_NAME}/root/mnt/configs
-mkdir -p /mnt/iocage/jails/${JAIL_NAME}/root/usr/ports
-iocage fstab -a "${JAIL_NAME}" "${PORTS_PATH}"/ports /usr/ports nullfs rw 0 0
-iocage fstab -a "${JAIL_NAME}" "${PORTS_PATH}"/db /var/db/portsnap nullfs rw 0 0
-iocage fstab -a "${JAIL_NAME}" "${FILES_PATH}" /mnt/files nullfs rw 0 0
-if [ "${DATABASE}" = "mariadb" ]; then
-  mkdir -p /mnt/iocage/jails/${JAIL_NAME}/root/var/db/mysql
-  iocage fstab -a "${JAIL_NAME}" "${DB_PATH}"  /var/db/mysql  nullfs  rw  0  0
-elif [ "${DATABASE}" = "pgsql" ]; then
-  mkdir -p /mnt/iocage/jails/${JAIL_NAME}/root/var/db/postgres
-  iocage fstab -a "${JAIL_NAME}" "${DB_PATH}"  /var/db/postgres  nullfs  rw  0  0
-fi
 iocage fstab -a "${JAIL_NAME}" "${CONFIGS_PATH}" /mnt/configs nullfs rw 0 0
+iocage exec "${JAIL_NAME}" mkdir -p /usr/local/www
 iocage exec "${JAIL_NAME}" chown -R www:www /mnt/files
 iocage exec "${JAIL_NAME}" chmod -R 770 /mnt/files
-iocage exec "${JAIL_NAME}" "if [ -z /usr/ports ]; then portsnap fetch extract; else portsnap auto; fi"
+iocage exec "${JAIL_NAME}" "if [ ! -e /usr/ports ]; then portsnap fetch extract; else portsnap auto; fi"
 fetch -o /tmp https://getcaddy.com
 if ! iocage exec "${JAIL_NAME}" bash -s personal "${DL_FLAGS}" < /tmp/getcaddy.com
 then
@@ -258,7 +224,6 @@ if [ "${DATABASE}" = "mariadb" ]; then
 fi
 iocage exec "${JAIL_NAME}" sed -i '' "s/yourhostnamehere/${HOST_NAME}/" /usr/local/www/Caddyfile
 iocage exec "${JAIL_NAME}" sed -i '' "s/DNS-PLACEHOLDER/${DNS_SETTING}/" /usr/local/www/Caddyfile
-iocage exec "${JAIL_NAME}" sed -i '' "s/JAIL-IP/${JAIL_IP}/" /usr/local/www/Caddyfile
 iocage exec "${JAIL_NAME}" sed -i '' "s|mytimezone|${TIME_ZONE}|" /usr/local/etc/php.ini
 
 iocage exec "${JAIL_NAME}" sysrc caddy_enable="YES"
@@ -325,7 +290,6 @@ fi
 iocage exec "${JAIL_NAME}" su -m www -c 'php /usr/local/www/nextcloud/occ config:system:set htaccess.RewriteBase --value="/"'
 iocage exec "${JAIL_NAME}" su -m www -c 'php /usr/local/www/nextcloud/occ maintenance:update:htaccess'
 iocage exec "${JAIL_NAME}" su -m www -c "php /usr/local/www/nextcloud/occ config:system:set trusted_domains 1 --value=\"${HOST_NAME}\""
-iocage exec "${JAIL_NAME}" su -m www -c "php /usr/local/www/nextcloud/occ config:system:set trusted_domains 2 --value=\"${JAIL_IP}\""
 iocage exec "${JAIL_NAME}" su -m www -c 'php /usr/local/www/nextcloud/occ app:enable encryption'
 iocage exec "${JAIL_NAME}" su -m www -c 'php /usr/local/www/nextcloud/occ encryption:enable'
 iocage exec "${JAIL_NAME}" su -m www -c 'php /usr/local/www/nextcloud/occ encryption:disable'

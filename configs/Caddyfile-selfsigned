@@ -1,8 +1,8 @@
-http://yourhostnamehere http://JAIL-IP {
+http://yourhostnamehere {
 	redir https://yourhostnamehere{uri}
 }
 
-https://yourhostnamehere https://JAIL-IP {
+https://yourhostnamehere {
 
 	root   /usr/local/www/nextcloud
 	log    /var/log/nextcloud_access.log
